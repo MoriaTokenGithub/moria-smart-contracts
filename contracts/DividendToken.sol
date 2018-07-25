@@ -301,7 +301,7 @@ contract DividendToken is StandardToken, Ownable {
       updateHoldings(msg.sender);
     }
     uint256 multiplier = buyBackTotal.mul(holdings[msg.sender][period]);    
-    uint256 owed = multiplier.div(buyBackTotal);
+    uint256 owed = multiplier.div(totalAt[period.sub(1)]);
     boughtBack[msg.sender] = true;
     msg.sender.transfer(owed);
   }
@@ -313,7 +313,7 @@ contract DividendToken is StandardToken, Ownable {
       updateHoldings(_address);
     }
     uint256 multiplier = buyBackTotal.mul(holdings[_address][period]);    
-    uint256 owed = multiplier.div(buyBackTotal);
+    uint256 owed = multiplier.div();
     boughtBack[_address] = true;
     _address.transfer(owed);
   }
