@@ -1,31 +1,28 @@
-pragma solidity ^0.4.18;
+pragma solidity ^0.4.24;
 
-import 'zeppelin-solidity/contracts/token/ERC20/StandardToken.sol';
-import 'zeppelin-solidity/contracts/math/SafeMath.sol';
-import 'zeppelin-solidity/contracts/ownership/Ownable.sol';
+import './DividendTokenStore.sol';
+import 'openzeppelin-solidity/contracts/math/SafeMath.sol';
 
-contract DividendToken is StandardToken, Ownable {
+contract StandardDividendTokenStore is DividendTokenStore {
   using SafeMath for uint256;
 
   uint256 public period = 0;
   uint256 public buyBackTime;
   bool public ended = false;
-  bool public paused = false;
   
   mapping (uint256 => uint256) public dividends;
   mapping (uint256 => uint256) public dividendDates;
   uint256 public buyBackTotal;
   mapping (address => bool) public boughtBack;
   
-  mapping (address => mapping (uint256 => uint256)) internal holdings;
-  mapping (address => uint256) internal last;
+  mapping (address => mapping (uint256 => uint256)) public holdings;
+  mapping (address => uint256) public last;
   mapping (address => uint256) public claimedTo;
   mapping (address => bool) beenDivLocked;
   mapping (address => uint256[]) divLocks;
 
   mapping(uint256 => uint256) totalAt;
-  
-  mapping (address => bool) admins;
+  uint256 public totalSupply_ = 0;
 
   modifier canBuyBack() {
     require(now > buyBackTime);
@@ -37,39 +34,20 @@ contract DividendToken is StandardToken, Ownable {
     _;
   }
 
-  modifier unpaused() {
-    require(!paused);
-    _;
+  constructor(uint256 _buyBackTime) public {
+    buyBackTime = _buyBackTime;
   }
 
-  modifier onlyAdmin() {
-    require(msg.sender == owner || admins[msg.sender]);
-    _;
-  }
-
-  function addAdmin(address _adminAddr) onlyAdmin public returns (bool success) {
-    admins[_adminAddr] = true;
-    AdminAdded(_adminAddr, msg.sender);
+  function mint(address _to, uint256 _amount) public onlyOwner returns (bool) {
+    require(period == 0);
+    holdings[_to][0] = holdings[_to][0].add(_amount);
+    totalAt[0] = totalAt[0].add(_amount);
+    totalSupply_ = totalAt[0];
     return true;
   }
 
-  function revokeAdmin(address _adminAddr) onlyAdmin public returns (bool success) {
-    require(msg.sender != _adminAddr);
-    admins[_adminAddr] = false;
-    AdminRevoked(_adminAddr, msg.sender);
-    return true;
-  }
-
-  function pause() onlyOwner public returns (bool success) {
-    paused = true;
-    Paused(period);
-    return true;
-  }
-
-  function unpause() onlyOwner public returns (bool success) {
-    paused = false;
-    Unpaused(period);
-    return true;
+  function totalSupply() public view returns (uint256) {
+    return totalSupply_;
   }
 
   function updateHoldings(address _holder) internal returns (bool success) {
@@ -84,7 +62,7 @@ contract DividendToken is StandardToken, Ownable {
     return true;
   }
 
-  function updateHoldingsTo(address _holder, uint256 _to) public onlyAdmin returns (bool success){
+  function updateHoldingsTo(address _holder, uint256 _to) public whenNotPaused returns (bool success){
     require(_to > last[_holder]);
     require(_to <= period);
     uint256 lastPeriod = last[_holder];
@@ -120,7 +98,7 @@ contract DividendToken is StandardToken, Ownable {
     totalAt[period] = totalAt[period].sub(balanceOf(_locked));
     beenDivLocked[_locked] = true;
     divLocks[_locked].push(period);
-    Locked(_locked, period);
+    emit Locked(_locked, period);
     return true;
   }
 
@@ -131,7 +109,7 @@ contract DividendToken is StandardToken, Ownable {
     }
     totalAt[period] = totalAt[period].add(balanceOf(_unlocked));
     divLocks[_unlocked].push(period);
-    Unlocked(_unlocked, period);
+    emit Unlocked(_unlocked, period);
     return true;
   }
 
@@ -142,41 +120,13 @@ contract DividendToken is StandardToken, Ownable {
     return holdings[_owner][last[_owner]];
   }
 
-  function transfer(address _to, uint256 _value) onlyLive unpaused public returns (bool) {
-    require(_to != address(0));
-    uint256 senderLastPeriod = last[msg.sender];
-    require(_value <= holdings[msg.sender][senderLastPeriod]);
-
-    if (senderLastPeriod < period) {
-      updateHoldings(msg.sender);
-    }
-
-    if (last[_to] < period) {
-      updateHoldings(_to);
-    }
-
-    holdings[msg.sender][period] = holdings[msg.sender][period].sub(_value);
-    holdings[_to][period] = holdings[_to][period].add(_value);
-    bool fromLocked = lockedAt(msg.sender, period);
-    bool toLocked = lockedAt(_to, period);
-    if(fromLocked && !toLocked) {
-      totalAt[period] = totalAt[period].add(_value);
-    } else if(!fromLocked && toLocked) {
-      totalAt[period] = totalAt[period].sub(_value);
-    }
-    Transfer(msg.sender, _to, _value);
-
-    return true;
-  }
-
-  function transferFrom(address _from, address _to, uint256 _value) onlyLive unpaused public returns (bool) {
+  function transfer(address _from, address _to, uint256 _value) onlyLive onlyOwner whenNotPaused public returns (bool) {
     require(_to != address(0));
     uint256 senderLastPeriod = last[_from];
     require(_value <= holdings[_from][senderLastPeriod]);
-    require(_value <= allowed[_from][msg.sender]);
 
-     if (senderLastPeriod < period) {
-       updateHoldings(_from);
+    if (senderLastPeriod < period) {
+      updateHoldings(_from);
     }
 
     if (last[_to] < period) {
@@ -185,7 +135,6 @@ contract DividendToken is StandardToken, Ownable {
 
     holdings[_from][period] = holdings[_from][period].sub(_value);
     holdings[_to][period] = holdings[_to][period].add(_value);
-    allowed[_from][msg.sender] = allowed[_from][msg.sender].sub(_value);
     bool fromLocked = lockedAt(_from, period);
     bool toLocked = lockedAt(_to, period);
     if(fromLocked && !toLocked) {
@@ -193,25 +142,24 @@ contract DividendToken is StandardToken, Ownable {
     } else if(!fromLocked && toLocked) {
       totalAt[period] = totalAt[period].sub(_value);
     }
-    Transfer(_from, _to, _value);
 
     return true;
   }
 
-  function () public onlyAdmin onlyLive payable {
+  function () public payable {
     payIn();
   }
 
-  function payIn() public onlyLive onlyAdmin payable returns (bool) {
+  function payIn() public payable onlyLive onlyOwner whenNotPaused returns (bool) {
     dividends[period] = msg.value;
     dividendDates[period] = now;
     period = period.add(1);
     totalAt[period] = totalAt[period.sub(1)];
-    Paid(msg.sender, period.sub(1), msg.value);
+    emit Paid(msg.sender, period.sub(1), msg.value);
     return true;
   }
   
-  function claimDividends() unpaused public returns (uint256 amount) {
+  function claimDividends() whenNotPaused public returns (uint256 amount) {
     require(claimedTo[msg.sender] < period);
     uint256 total = 0;
     if (last[msg.sender] < period) {
@@ -226,12 +174,12 @@ contract DividendToken is StandardToken, Ownable {
     claimedTo[msg.sender] = period;
     if(total > 0) {
       msg.sender.transfer(total);
-      Claimed(msg.sender, i, total);
+      emit Claimed(msg.sender, i, total);
     }
     return total;
   }
 
-  function claimDividendsFor(address _address) onlyAdmin public returns (uint256 amount) {
+  function claimDividendsFor(address _address) onlyOwner public returns (uint256 amount) {
     require(claimedTo[_address] < period);
     uint256 total = 0;
     if (last[_address] < period) {
@@ -246,7 +194,7 @@ contract DividendToken is StandardToken, Ownable {
     claimedTo[_address] = period;
     if(total > 0) {
       _address.transfer(total);
-      Claimed(_address, i, total);
+      emit Claimed(_address, i, total);
     }
     return total;
   }
@@ -287,10 +235,10 @@ contract DividendToken is StandardToken, Ownable {
     return total;
   }
   
-  function buyBack() public onlyAdmin onlyLive canBuyBack payable returns (bool) {
+  function buyBack() public onlyOwner onlyLive canBuyBack payable returns (bool) {
     buyBackTotal = msg.value;
     period += 1;
-    Paid(msg.sender, period - 1, msg.value);
+    emit Paid(msg.sender, period - 1, msg.value);
     ended = true;
   }
 
@@ -306,7 +254,7 @@ contract DividendToken is StandardToken, Ownable {
     msg.sender.transfer(owed);
   }
 
-  function claimBuyBackFor(address _address) onlyAdmin public returns (bool) {
+  function claimBuyBackFor(address _address) onlyOwner public returns (bool) {
     require(ended);
     require(!boughtBack[_address]);
     if (last[_address] < period) {
@@ -359,13 +307,4 @@ contract DividendToken is StandardToken, Ownable {
   event Locked(address indexed _locked, uint256 indexed _at);
 
   event Unlocked(address indexed _unlocked, uint256 indexed _at);
-
-  event Paused(uint256 indexed _at);
-
-  event Unpaused(uint256 indexed _at);
-
-  event AdminAdded(address indexed _admin, address indexed _by);
-
-  event AdminRevoked(address indexed _admin, address indexed _by);
-
 }

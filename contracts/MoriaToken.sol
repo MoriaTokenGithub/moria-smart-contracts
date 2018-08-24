@@ -1,29 +1,125 @@
-pragma solidity ^0.4.18;
+pragma solidity ^0.4.24;
 
-import './DividendToken.sol';
+import './DividendTokenStore.sol';
+import './Administratable.sol';
+import 'openzeppelin-solidity/contracts/token/ERC20/StandardToken.sol';
 
-contract MoriaToken is DividendToken {
-
+contract MoriaToken is StandardToken, Administratable {
+  
   string public constant name = "MoriaToken";
   string public constant symbol = "MOR";
   uint8 public constant decimals = 18;
 
+  DividendTokenStore public store;
+  bool public canDestroy = true;
+  bool public minting = true;
 
-  uint256 public constant INITIAL_SUPPLY = 51551579 * (10 ** uint256(decimals));
-  address public constant DISTRIBUTION_ADDRESS = 0xDa3A7447Ab13a6F0839f226bef2d49B42F551a50;
-  address public constant OWNER_ADDRESS = 0x5E2CCb61937f1321Bc6d3B16ED136a22D176aa77;
-  uint256 public constant BUY_BACK_TIME = 1740355200; // 2025-02-24 00:00:00 GMT
-
-  function MoriaToken() public {
-    totalSupply_ = INITIAL_SUPPLY;
-    totalAt[0] = INITIAL_SUPPLY;
-    holdings[DISTRIBUTION_ADDRESS][0] = INITIAL_SUPPLY;
-    Transfer(0x0, DISTRIBUTION_ADDRESS, INITIAL_SUPPLY);
-    admins[msg.sender] = true;
-    admins[0x5f78A853120075AE2D4214241db2844984244D41] = true;
-    admins[0x303d204483128B51d69815bf3e8B27aa0B18156C] = true;
-    admins[0x5D0Ca453db10c716E7645CAe65B01fA41cA9b16c] = true;
-    owner = OWNER_ADDRESS;
-    buyBackTime = BUY_BACK_TIME;
+  modifier isDestroyable() {
+    require(canDestroy);
+    _;
   }
+
+  modifier canMint() {
+    require(minting);
+    _;
+  }
+
+  constructor() public {
+  }
+
+  function () public payable {
+    require(store.payIn.value(msg.value)());
+  }
+
+  function totalSupply() public view returns (uint256) {
+    return store.totalSupply();
+  }
+
+  function balanceOf(address _owner) public view returns (uint256 balance) {
+    return store.balanceOf(_owner);
+  }
+
+  function transfer(address _to, uint256 _value) public returns (bool) {
+    store.transfer(msg.sender, _to, _value);
+    emit Transfer(msg.sender, _to, _value);
+    return true;
+  }
+
+  function transferFrom(address _from, address _to, uint256 _value) public returns (bool) {
+    require(_value <= allowed[_from][msg.sender]);
+    store.transfer(_from, _to, _value);
+    allowed[_from][msg.sender] = allowed[_from][msg.sender].sub(_value);
+    emit Transfer(_from, _to, _value);
+    return true;
+  }
+
+  function pause() public onlyOwner {
+    store.pause();
+  }
+
+  function unpause() public onlyOwner {
+    store.unpause();
+  }
+
+  function addLock(address _address) onlyAdmin public returns (bool) {
+    return store.addLock(_address);
+  }
+
+  function revokeLock(address _address) onlyAdmin public returns (bool) {
+    return store.revokeLock(_address);
+  }
+
+  function claimDividends() public returns (uint256 amount) {
+    return store.claimDividendsFor(msg.sender);
+  }
+
+  function claimDividendsFor(address _address) public onlyAdmin returns (uint256 amount) {
+    return store.claimDividendsFor(_address);
+  }
+
+  function buyBack() public onlyAdmin payable returns (bool) {
+    require(store.buyBack.value(msg.value)());
+    return true;
+  }
+
+  function claimBuyBack() public returns (bool) {
+    return claimBuyBackFor(msg.sender);
+  }
+
+  function claimBuyBackFor(address _address) public onlyAdmin returns (bool) {
+    return claimBuyBackFor(_address);
+  }
+ 
+  // admin
+
+  function mint(address _from, address _to, uint256 _amount) public onlyOwner canMint returns (bool) {
+    store.mint(_to, _amount);
+    emit Transfer(_from, _to, _amount);
+  }
+
+  function endMinting() public onlyOwner canMint returns (bool) {
+    minting = false;
+  }
+
+  function changeStore(DividendTokenStore _store) public onlyOwner returns (bool) {
+    store = _store;
+    emit StoreChanged(address(store));
+    return true;
+  }
+
+  function transferStoreOwnership(address _newOwner) public onlyOwner {
+    store.transferOwnership(_newOwner);
+  }
+
+  function destroyToken() public onlyOwner isDestroyable {
+    transferStoreOwnership(owner);
+    selfdestruct(owner);
+  }
+
+  function disableSelfDestruct() public onlyOwner isDestroyable {
+    canDestroy = false;
+  } 
+
+  event StoreChanged(address indexed _newStore);
+  
 }
